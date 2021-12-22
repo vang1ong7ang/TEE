@@ -21,6 +21,7 @@ namespace BurgerStrategist
             (List<byte[]> CANDIDATES, List<BigInteger> CANDIDATE_VOTES) = NativeContract.NEO.Hash.MakeScript("getCandidates").Call().Single().ToVMArray().Select(v => v.ToVMStruct()).Map2(v => v.First().ToBytes(), v => v.Last().GetInteger());
             (List<byte[]> AGENT_TO, List<BigInteger> AGENT_HOLD) = AGENTS.Select(v => NativeContract.NEO.Hash.MakeScript("getAccountState", v)).SelectMany(a => a).ToArray().Call().Select(v => v.ToVMStruct()).Map2(v => v.Last().ToBytes(), v => v.First().GetInteger());
 
+
             $"AGENTS: {String.Join(", ", AGENTS)}".Log();
             $"CANDIDATES: {String.Join(", ", CANDIDATES.Select(v => v.ToHexString()))}".Log();
             $"CANDIDATE_VOTES: {String.Join(", ", CANDIDATE_VOTES)}".Log();
@@ -50,25 +51,11 @@ namespace BurgerStrategist
             $"SELECTS: {String.Join(", ", SELECTS.Select(v => v.ToHexString()))}".Log();
             $"SELECT_K: {String.Join(", ", SELECT_K)}".Log();
             $"SELECT_V: {String.Join(", ", SELECT_V)}".Log();
-
             BigInteger N = AGENT_HOLD.Sum() + SELECT_V.Sum();
             $"N: {N}".Log();
 
-            List<double> SELECT_T = SELECT_K.Zip(SELECT_V).Select(v => Math.Sqrt((double)(v.First * v.Second))).ToList();
-            $"SELECT_T: {String.Join(", ", SELECT_T)}".Log();
-
-
-            double U = (double)N / SELECT_T.Sum();
-            $"U: {U}".Log();
-
-            List<BigInteger> SELECT_VOTES = SELECT_T.Select(v => v * U).Select(v => (BigInteger)v).ToList();
-            $"SELECT_VOTES: {String.Join(", ", SELECT_VOTES)}".Log();
-
-
-            List<BigInteger> SELECT_HOLD = SELECT_VOTES.Zip(SELECT_V).Select(v => v.First - v.Second).ToList();
-            SELECT_HOLD[0] += AGENT_HOLD.Sum() - SELECT_HOLD.Sum();
-            $"SELECT_HOLD: {String.Join(", ", SELECT_HOLD)}".Log();
-            SELECT_HOLD.ForEach(v => { if (v < 0) throw new Exception(); });
+            List<BigInteger> SELECT_HOLD = Solve(SELECT_K, SELECT_V, N);
+            $"FINAL SELECT_HOLD: {String.Join(", ", SELECT_HOLD)}".Log();
 
             BigInteger SCORE0 = AGENT_TO.Zip(AGENT_HOLD).Select(v => ELECTEDS.Zip(ELECTED_K).FindByOrDefault(v.First) * v.Second / (v.Second + CANDIDATES.Zip(CANDIDATE_V).FindBy(v.First))).Sum();
             BigInteger SCORE = SELECTS.Zip(SELECT_HOLD).Select(v => ELECTEDS.Zip(ELECTED_K).FindByOrDefault(v.First) * v.Second / (v.Second + CANDIDATES.Zip(CANDIDATE_V).FindBy(v.First))).Sum();
@@ -111,10 +98,31 @@ namespace BurgerStrategist
             SCRIPTVOTES.Concat(SCRIPTTRANSFERS).SelectMany(a => a).ToArray().SendTx().Out();
         }
 
-        static List<BigInteger> Solve(List<BigInteger> K, List<BigInteger> V, BigInteger N)
+        static List<BigInteger> Solve(List<BigInteger> SELECT_K, List<BigInteger> SELECT_V, BigInteger N)
         {
-            // TODO
-            return null;
+            List<double> SELECT_T = SELECT_K.Zip(SELECT_V).Select(v => Math.Sqrt((double)(v.First * v.Second))).ToList();
+            $"SELECT_T: {String.Join(", ", SELECT_T)}".Log();
+
+            double U = (double)N / SELECT_T.Sum();
+            $"U: {U}".Log();
+
+            List<BigInteger> SELECT_VOTES = SELECT_T.Select(v => v * U).Select(v => (BigInteger)v).ToList();
+            $"SELECT_VOTES: {String.Join(", ", SELECT_VOTES)}".Log();
+
+            List<BigInteger> SELECT_HOLD = SELECT_VOTES.Zip(SELECT_V).Select(v => v.First - v.Second).ToList();
+            SELECT_HOLD[0] += N - SELECT_V.Sum() - SELECT_HOLD.Sum();
+            $"SELECT_HOLD: {String.Join(", ", SELECT_HOLD)}".Log();
+
+            foreach (var item in SELECT_HOLD.Select((value, i) => new { i, value }))
+            {
+                if (item.value < 1) {
+                    var SUB_SELECT_HOLD = Solve(SELECT_K.Take(item.i).Concat(SELECT_K.Skip(item.i+1)).ToList(), SELECT_V.Take(item.i).Concat(SELECT_V.Skip(item.i+1)).ToList(), N + 1 - SELECT_HOLD[item.i] - SELECT_V[item.i]);
+                    SUB_SELECT_HOLD.Insert(item.i, 1);
+                    return SUB_SELECT_HOLD.ToList();
+                }
+            }
+
+            return SELECT_HOLD;
         }
     }
 }
